@@ -4,7 +4,7 @@ usage () {
   echo "usage: $0 [-i <IR seq>] [-g <path to genome files>] <pfx> "
   echo "Required parameters:"
   echo "-i     This is your IR sequence"
-  echo "-g     The location of the genome you're using (PA14)"
+  echo "-g     The location of the genome you're using"
   echo "must load these modules prior to using script: 
         python/2.7, cutadapt/1.8.1, bowtie2/2.3.2"
   echo "To load modules: module load python/2.7 , etc."
