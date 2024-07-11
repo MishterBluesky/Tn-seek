@@ -66,12 +66,6 @@ echo "TnSeq processing stats for $PREFIX" > $PREFIX-TnSeq.txt
 echo "Total sequences: " >> $PREFIX-TnSeq.txt
 egrep -c '^@' $PREFIX.fastq >> $PREFIX-TnSeq.txt
 
-
-# IRs
-echo "$PREFIX: Searching for reads with an IR..."
-echo "$PREFIX: Removing primer and IR sequences..."
-# Modify the -M flag depending on your sequence length. This is currently based on 75 bp reads.
-
 # Map and convert - feel free to change bowtie2 parameters yourself
 echo "$PREFIX: Mapping with Bowtie2..."
 echo "Bowtie2 report:" >> $PREFIX-TnSeq.txt
