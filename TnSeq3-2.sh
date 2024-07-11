@@ -71,7 +71,6 @@ egrep -c '^@' $PREFIX.fastq >> $PREFIX-TnSeq.txt
 echo "$PREFIX: Searching for reads with an IR..."
 echo "$PREFIX: Removing primer and IR sequences..."
 # Modify the -M flag depending on your sequence length. This is currently based on 75 bp reads.
-cutadapt -b $IR -M 50 -m 15 --discard-untrimmed -j 16 -o $PREFIX.trim.fastq $PREFIX.fastq >$PREFIX.cutadapt_log.txt
 
 # Map and convert - feel free to change bowtie2 parameters yourself
 echo "$PREFIX: Mapping with Bowtie2..."
@@ -115,7 +114,6 @@ head -10 $PREFIX-sites.txt >> $PREFIX-TnSeq.txt
 # Sort output, cleanup
 echo "$PREFIX: Cleaning up..."
 mkdir $PREFIX 2> /dev/null
-mv $PREFIX.cutadapt_log.txt $PREFIX/
 mv $PREFIX.trim.fastq $PREFIX/
 mv $PREFIX-TnSeq.txt $PREFIX/
 mv $PREFIX.sam $PREFIX/
