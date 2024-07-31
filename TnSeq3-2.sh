@@ -60,11 +60,10 @@ fi
 
 PREFIX=$1
 BOWTIEREF=$GENOME
-
 echo "Performing TnSeq analysis on $PREFIX..."
 echo "TnSeq processing stats for $PREFIX" > $PREFIX-TnSeq.txt
 echo "Total sequences: " >> $PREFIX-TnSeq.txt
-egrep -c '^@' $PREFIX.fastq >> $PREFIX-TnSeq.txt
+egrep -c '^@' $PREFIX.trim.fastq >> $PREFIX-TnSeq.txt
 
 # Map and convert - feel free to change bowtie2 parameters yourself
 echo "$PREFIX: Mapping with Bowtie2..."
