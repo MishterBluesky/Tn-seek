@@ -68,7 +68,7 @@ egrep -c '^@' $PREFIX.trim.fastq >> $PREFIX-TnSeq.txt
 # Map and convert - feel free to change bowtie2 parameters yourself
 echo "$PREFIX: Mapping with Bowtie2..."
 echo "Bowtie2 report:" >> $PREFIX-TnSeq.txt
-bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x $GENOME -U $PREFIX.trim.fastq -S $PREFIX.sam 2>> $PREFIX-TnSeq.txt
+bowtie2 --local --very-sensitive-local -L 13 -k 1 -p 16 -x $GENOME -U $PREFIX.trim.fastq -S $PREFIX.sam 2>> $PREFIX-TnSeq.txt
 grep '^@' $PREFIX.sam > $PREFIX-mapped.sam
 cat $PREFIX.sam | grep -v '^@' | awk '$2 !~ /4/' | sort -u -k1,1 >> $PREFIX-mapped.sam
 
