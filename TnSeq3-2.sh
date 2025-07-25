@@ -5,15 +5,11 @@ usage () {
   echo "Required parameters:"
   echo "-i     This is your IR sequence"
   echo "-g     The location of the genome you're using"
-  echo "must load these modules prior to using script: 
-        python/2.7, cutadapt/1.8.1, bowtie2/2.3.2"
-  echo "To load modules: module load python/2.7 , etc."
   echo ""
   echo "Example:"
   echo "$0 -i TATAAGAGTCAG -g \$HOME/ref_genome/PA14/PA14 condition1"
 }
 
-# Read options
 while getopts "i:g:" option; do
   case "$option" in
     i) IR="$OPTARG" ;;
@@ -33,59 +29,64 @@ fi
 PREFIX=$1
 BOWTIEREF=$GENOME
 MAPFILE="${PREFIX}.fragment_map.tsv"
+TRIMM="${PREFIX}.trimm.fastq"
+TRIMMED="${PREFIX}.trim.fastq"
+COLLAPSED="${PREFIX}.collapsed.trim.fastq"
+COLLAPSED_SAM="${PREFIX}.collapsed.sam"
 
 echo "Performing TnSeq analysis on $PREFIX..."
-
-# Count total parent reads (from original trimmed FASTQ before fragmentation)
-TOTAL_PARENTS=$(egrep -c '^@' ${PREFIX}.trimm.fastq)
-
-# Count total 15-mer fragments (from fragmented FASTQ)
-TOTAL_FRAGMENTS=$(egrep -c '^@' ${PREFIX}.trim.fastq)
-
 echo "TnSeq processing stats for $PREFIX" > $PREFIX-TnSeq.txt
-echo "Total 15-mer fragments: $TOTAL_FRAGMENTS" >> $PREFIX-TnSeq.txt
-echo "Total parent reads: $TOTAL_PARENTS" >> $PREFIX-TnSeq.txt
-echo "" >> $PREFIX-TnSeq.txt
 
-# Mapping
-echo "$PREFIX: Mapping with Bowtie2..."
-echo "Bowtie2 report:" >> $PREFIX-TnSeq.txt
-bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x $GENOME -U $PREFIX.trim.fastq -S $PREFIX.sam 2>> $PREFIX-TnSeq.txt
+# Total parent reads
+PARENT_TOTAL=$(grep -c '^@' "$TRIMM")
+echo "Total parent reads: $PARENT_TOTAL" >> $PREFIX-TnSeq.txt
 
-# Extract mapped fragments (reads with valid alignment)
-grep -v '^@' $PREFIX.sam | awk '$2 !~ /4/' | sort -u -k1,1 > $PREFIX-mapped.sam
+# Total fragments (15mers)
+echo -n "Total 15mer fragments: " >> $PREFIX-TnSeq.txt
+grep -c '^@' "$TRIMMED" >> $PREFIX-TnSeq.txt
+
+# Primary mapping
+echo "$PREFIX: Mapping all fragments with Bowtie2..."
+bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x "$GENOME" -U "$TRIMMED" -S "$PREFIX.raw.sam" 2>> $PREFIX-TnSeq.txt
+
+# Extract best-scoring fragment per parent
+echo "$PREFIX: Collapsing to best-scoring fragment per parent..."
+grep -v '^@' "$PREFIX.raw.sam" | awk '
+{
+  split($1, parts, "_");
+  parent = parts[1];
+  score = $5;
+  line = $0;
+  if (score > best[parent]) {
+    best[parent] = score;
+    mapline[parent] = line;
+  }
+}
+END {
+  for (p in mapline) print mapline[p];
+}
+' > "$PREFIX.best.sam"
+
+# Get fragment headers
+cut -f1 "$PREFIX.best.sam" > "$PREFIX.best_fragments.txt"
+
+# Reconstruct collapsed FASTQ from .trim.fastq
+echo "$PREFIX: Reconstructing collapsed.fastq from best fragments..."
+grep -A 3 -Ff "$PREFIX.best_fragments.txt" "$TRIMMED" | grep -v '^--$' > "$COLLAPSED"
+
+# Remap only best fragments
+echo "$PREFIX: Mapping collapsed reads with Bowtie2..."
+bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x "$GENOME" -U "$COLLAPSED" -S "$COLLAPSED_SAM" 2>> $PREFIX-TnSeq.txt
+
+# Filter mapped reads
+grep -v '^@' "$COLLAPSED_SAM" | awk '$2 != 4' | sort -u -k1,1 > "$PREFIX.mapped.sam"
 
 echo "Number of reads mapping at high enough score:" >> $PREFIX-TnSeq.txt
-wc -l $PREFIX-mapped.sam >> $PREFIX-TnSeq.txt
-echo "" >> $PREFIX-TnSeq.txt
+wc -l < "$PREFIX.mapped.sam" >> $PREFIX-TnSeq.txt
 
-# Collapse fragment hits to unique parent reads using fragment map
-if [ -f "$MAPFILE" ]; then
-  echo "$PREFIX: Collapsing mapped fragments to parent reads..."
-
-  cut -f1 $PREFIX-mapped.sam | sort | uniq > ${PREFIX}-mapped_fragments.txt
-
-  join -1 1 -2 1 \
-    <(sort ${PREFIX}-mapped_fragments.txt) \
-    <(sort -k1,1 $MAPFILE) \
-    | cut -f2 | sort | uniq > ${PREFIX}-mapped_parents.txt
-
-  MAPPED_PARENTS=$(wc -l < ${PREFIX}-mapped_parents.txt)
-  UNMAPPED_PARENTS=$((TOTAL_PARENTS - MAPPED_PARENTS))
-
-  # Calculate percentages
-  PCT_MAPPED=$(awk "BEGIN {printf \"%.2f\", 100*${MAPPED_PARENTS}/${TOTAL_PARENTS}}")
-  PCT_UNMAPPED=$(awk "BEGIN {printf \"%.2f\", 100*${UNMAPPED_PARENTS}/${TOTAL_PARENTS}}")
-
-  echo "Parent reads with one or more mapped fragments: $MAPPED_PARENTS ($PCT_MAPPED%)" >> $PREFIX-TnSeq.txt
-  echo "Parent reads with no mapped fragments: $UNMAPPED_PARENTS ($PCT_UNMAPPED%)" >> $PREFIX-TnSeq.txt
-else
-  echo "WARNING: Fragment map file $MAPFILE not found. Skipping parent deduplication." >> $PREFIX-TnSeq.txt
-fi
-
-# Directional site analysis
-echo "$PREFIX: Tallying mapping results with directionality..."
-grep -v '^@'  $PREFIX-mapped.sam | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
+# Tally sites (directional)
+echo "$PREFIX: Generating directional site list..."
+grep -v '^@' "$PREFIX.mapped.sam" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
   if ! [[ "$f2" =~ "100" ]]; then
     if ! [[ "$f2" =~ "10" ]]; then
       echo "$f4 $f2"
@@ -93,11 +94,11 @@ grep -v '^@'  $PREFIX-mapped.sam | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 
       echo "$((f4 + ${#f10} - 2)) $f2"
     fi
   fi
-done | grep '[0-9]' | sort | uniq -c | sort -n -r > $PREFIX-directional-sites.txt
+done | grep '[0-9]' | sort | uniq -c | sort -n -r > "$PREFIX-directional-sites.txt"
 
-# Position-only site analysis
-echo "$PREFIX: Tallying mapping results..."
-grep -v '^@' $PREFIX-mapped.sam | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
+# Tally sites (position only)
+echo "$PREFIX: Generating positional site list..."
+grep -v '^@' "$PREFIX.mapped.sam" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
   if ! [[ "$f2" =~ "100" ]]; then
     if ! [[ "$f2" =~ "10" ]]; then
       echo "$f4"
@@ -105,21 +106,27 @@ grep -v '^@' $PREFIX-mapped.sam | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f
       echo "$((f4 + ${#f10} - 2))"
     fi
   fi
-done | grep '[0-9]' | sort | uniq -c | sort -n -r > $PREFIX-sites.txt
+done | grep '[0-9]' | sort | uniq -c | sort -n -r > "$PREFIX-sites.txt"
 
+# Site stats
 echo "Number of insertion sites identified:" >> $PREFIX-TnSeq.txt
-wc -l $PREFIX-sites.txt >> $PREFIX-TnSeq.txt
+wc -l < "$PREFIX-sites.txt" >> $PREFIX-TnSeq.txt
 echo "Most frequent sites:" >> $PREFIX-TnSeq.txt
-head -10 $PREFIX-sites.txt >> $PREFIX-TnSeq.txt
+head -10 "$PREFIX-sites.txt" >> $PREFIX-TnSeq.txt
 
-# Cleanup
-echo "$PREFIX: Cleaning up..."
-mkdir -p $PREFIX
-mv $PREFIX.trim.fastq $PREFIX/
-mv $PREFIX-TnSeq.txt $PREFIX/
-mv $PREFIX.sam $PREFIX/
-mv $PREFIX-mapped.sam $PREFIX/
-mv $PREFIX-directional-sites.txt $PREFIX/
-mv $PREFIX-sites.txt $PREFIX/
-[ -f "${PREFIX}-mapped_parents.txt" ] && mv ${PREFIX}-mapped_parents.txt $PREFIX/
-[ -f "${PREFIX}-mapped_fragments.txt" ] && mv ${PREFIX}-mapped_fragments.txt $PREFIX/
+# Parent read mapping stats
+MAPPED_PARENTS=$(cut -f1 "$PREFIX.mapped.sam" | sed 's/_.*//' | sort | uniq | wc -l)
+UNMAPPED_PARENTS=$((PARENT_TOTAL - MAPPED_PARENTS))
+PCT_MAPPED=$(awk -v a=$MAPPED_PARENTS -v b=$PARENT_TOTAL 'BEGIN { printf "%.2f", (a/b)*100 }')
+PCT_UNMAPPED=$(awk -v a=$UNMAPPED_PARENTS -v b=$PARENT_TOTAL 'BEGIN { printf "%.2f", (a/b)*100 }')
+
+echo "Parent reads with one or more mapped fragments: $MAPPED_PARENTS ($PCT_MAPPED%)" >> $PREFIX-TnSeq.txt
+echo "Parent reads with no mapped fragments: $UNMAPPED_PARENTS ($PCT_UNMAPPED%)" >> $PREFIX-TnSeq.txt
+
+# Organize outputs
+mkdir -p "$PREFIX"
+mv $PREFIX.*.fastq "$PREFIX/" 2>/dev/null
+mv $PREFIX.*.sam "$PREFIX/" 2>/dev/null
+mv $PREFIX.*.txt "$PREFIX/" 2>/dev/null
+mv $PREFIX-sites.txt "$PREFIX/"
+mv $PREFIX-directional-sites.txt "$PREFIX/"
