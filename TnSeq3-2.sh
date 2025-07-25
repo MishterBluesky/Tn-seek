@@ -34,21 +34,20 @@ MAPFILE="${PREFIX}.fragment_map.tsv"
 
 echo "Performing TnSeq analysis on fragments $PREFIX..."
 echo "TnSeq processing stats for $PREFIX" > $PREFIX-TnSeq.txt
-echo "Total sequences: " >> $PREFIX-TnSeq.txt
+echo "Total sequences in original trimmed FASTQ: " >> $PREFIX-TnSeq.txt
 egrep -c '^@' $PREFIX.trim.fastq >> $PREFIX-TnSeq.txt
 
-# Initial Mapping
+# Initial Mapping (optional, can keep for stats but downstream uses collapsed)
 echo "$PREFIX: Mapping with Bowtie2..."
 echo "Bowtie2 report:" >> $PREFIX-TnSeq.txt
 bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x "$GENOME" -U "$PREFIX.trim.fastq" -S "$PREFIX.sam" 2>> $PREFIX-TnSeq.txt
 
-# Extract mapped fragments
+# Extract mapped fragments from initial mapping (optional for stats)
 grep -v '^@' $PREFIX.sam | sort -u -k1,1 > $PREFIX-mapped.sam
-
-echo "Number of reads mapping at high enough score:" >> $PREFIX-TnSeq.txt
+echo "Number of reads mapping (original):" >> $PREFIX-TnSeq.txt
 wc -l < "$PREFIX-mapped.sam" >> $PREFIX-TnSeq.txt
 
-# Collapse fragment hits to best parent
+# Collapse fragment hits to best parent if fragment map available
 if [ -f "$MAPFILE" ]; then
   echo "$PREFIX: Collapsing mapped fragments to parent reads..."
 
@@ -56,22 +55,15 @@ if [ -f "$MAPFILE" ]; then
     fragment = $1;
     score = $5 + 0;
 
-    # Split the fragment name by colon
     n = split(fragment, parts, ":");
-
-    # If 3rd field has an underscore, remove the suffix
     if (index(parts[3], "_") > 0) {
       split(parts[3], subparts, "_");
       parts[3] = subparts[1];
     }
-
-    # Rebuild parent ID
     parent = parts[1];
     for (i = 2; i <= n; i++) {
       parent = parent ":" parts[i];
     }
-
-    # Store highest score fragment for each parent
     if (!(parent in best) || score > best[parent]) {
       best[parent] = score;
       best_read[parent] = fragment;
@@ -83,7 +75,7 @@ if [ -f "$MAPFILE" ]; then
 
   echo "Number of unique best fragments for each read (should be same as cutadapt step): $(wc -l < "$PREFIX.best_fragments.txt")"
 
-  # Create collapsed FASTQ
+  # Create collapsed FASTQ from best fragments
   echo "$PREFIX: Generating collapsed trimmed FASTQ..."
 
   TRIMMED="${PREFIX}.trim.fastq"
@@ -94,17 +86,31 @@ if [ -f "$MAPFILE" ]; then
 
   echo "Created collapsed trimmed fastq to rerun bowtie on best fragments: $COLLAPSED"
 
-  # OPTIONAL: Uncomment below if you want to map collapsed reads
+  # Map collapsed reads
   echo "$PREFIX: Mapping collapsed reads with Bowtie2..."
   bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x "$GENOME" -U "$COLLAPSED" -S "${PREFIX}.collapsed.sam" 2>> $PREFIX-TnSeq.txt
+
+  # Update stats for collapsed reads
+  echo "Total sequences in collapsed FASTQ:" >> $PREFIX-TnSeq.txt
+  egrep -c '^@' "$COLLAPSED" >> $PREFIX-TnSeq.txt
+
+  echo "Number of reads mapping (collapsed):" >> $PREFIX-TnSeq.txt
+  grep -v '^@' "${PREFIX}.collapsed.sam" | wc -l >> $PREFIX-TnSeq.txt
 
 else
   echo "WARNING: Fragment map file $MAPFILE not found. Skipping parent deduplication." >> $PREFIX-TnSeq.txt
 fi
 
-# Directional site analysis
+# Use collapsed.sam for all site analysis (if exists), else fallback
+if [ -f "${PREFIX}.collapsed.sam" ]; then
+  FINAL_SAM="${PREFIX}.collapsed.sam"
+else
+  FINAL_SAM="${PREFIX}-mapped.sam"
+fi
+
+# Directional site analysis on collapsed reads
 echo "$PREFIX: Tallying mapping results with directionality..."
-grep -v '^@' "$PREFIX-mapped.sam" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
+grep -v '^@' "$FINAL_SAM" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
   if ! [[ "$f2" =~ "100" ]]; then
     if ! [[ "$f2" =~ "10" ]]; then
       echo "$f4 $f2"
@@ -114,9 +120,9 @@ grep -v '^@' "$PREFIX-mapped.sam" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7
   fi
 done | grep '[0-9]' | sort | uniq -c | sort -nr > "$PREFIX-directional-sites.txt"
 
-# Position-only site analysis
+# Position-only site analysis on collapsed reads
 echo "$PREFIX: Tallying mapping results..."
-grep -v '^@' "$PREFIX-mapped.sam" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
+grep -v '^@' "$FINAL_SAM" | while IFS=$'\t' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 f10; do
   if ! [[ "$f2" =~ "100" ]]; then
     if ! [[ "$f2" =~ "10" ]]; then
       echo "$f4"
@@ -144,5 +150,6 @@ mv "$PREFIX-sites.txt" "$PREFIX/"
 [ -f "$PREFIX.best_fragments.txt" ] && mv "$PREFIX.best_fragments.txt" "$PREFIX/"
 [ -f "$PREFIX.best_headers.txt" ] && mv "$PREFIX.best_headers.txt" "$PREFIX/"
 [ -f "$COLLAPSED" ] && mv "$COLLAPSED" "$PREFIX/"
+[ -f "${PREFIX}.collapsed.sam" ] && mv "${PREFIX}.collapsed.sam" "$PREFIX/"
 
 echo "$PREFIX: Done!"
