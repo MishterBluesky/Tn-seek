@@ -43,7 +43,7 @@ echo "Bowtie2 report:" >> $PREFIX-TnSeq.txt
 bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x "$GENOME" -U "$PREFIX.trim.fastq" -S "$PREFIX.sam" 2>> $PREFIX-TnSeq.txt
 
 # Extract mapped fragments
-grep -v '^@' "$PREFIX.sam" | awk '$2 != 4' | sort -u -k1,1 > "$PREFIX-mapped.sam"
+grep -v '^@' $PREFIX.sam | sort -u -k1,1 > $PREFIX-mapped.sam
 
 echo "Number of reads mapping at high enough score:" >> $PREFIX-TnSeq.txt
 wc -l < "$PREFIX-mapped.sam" >> $PREFIX-TnSeq.txt
