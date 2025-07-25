@@ -35,22 +35,31 @@ BOWTIEREF=$GENOME
 MAPFILE="${PREFIX}.fragment_map.tsv"
 
 echo "Performing TnSeq analysis on $PREFIX..."
+
+# Count total parent reads (from original trimmed FASTQ before fragmentation)
+TOTAL_PARENTS=$(egrep -c '^@' ${PREFIX}.trimm.fastq)
+
+# Count total 15-mer fragments (from fragmented FASTQ)
+TOTAL_FRAGMENTS=$(egrep -c '^@' ${PREFIX}.trim.fastq)
+
 echo "TnSeq processing stats for $PREFIX" > $PREFIX-TnSeq.txt
-echo "Total sequences: " >> $PREFIX-TnSeq.txt
-egrep -c '^@' $PREFIX.trim.fastq >> $PREFIX-TnSeq.txt
+echo "Total 15-mer fragments: $TOTAL_FRAGMENTS" >> $PREFIX-TnSeq.txt
+echo "Total parent reads: $TOTAL_PARENTS" >> $PREFIX-TnSeq.txt
+echo "" >> $PREFIX-TnSeq.txt
 
 # Mapping
 echo "$PREFIX: Mapping with Bowtie2..."
 echo "Bowtie2 report:" >> $PREFIX-TnSeq.txt
 bowtie2 --end-to-end --very-sensitive -R 6 -p 16 -a -x $GENOME -U $PREFIX.trim.fastq -S $PREFIX.sam 2>> $PREFIX-TnSeq.txt
 
-# Extract mapped fragments
-cat $PREFIX.sam | grep -v '^@' | awk '$2 !~ /4/' | sort -u -k1,1 > $PREFIX-mapped.sam
+# Extract mapped fragments (reads with valid alignment)
+grep -v '^@' $PREFIX.sam | awk '$2 !~ /4/' | sort -u -k1,1 > $PREFIX-mapped.sam
 
 echo "Number of reads mapping at high enough score:" >> $PREFIX-TnSeq.txt
-cat $PREFIX-mapped.sam | wc -l >> $PREFIX-TnSeq.txt
+wc -l $PREFIX-mapped.sam >> $PREFIX-TnSeq.txt
+echo "" >> $PREFIX-TnSeq.txt
 
-# Collapse fragment hits to unique parent reads
+# Collapse fragment hits to unique parent reads using fragment map
 if [ -f "$MAPFILE" ]; then
   echo "$PREFIX: Collapsing mapped fragments to parent reads..."
 
@@ -61,8 +70,15 @@ if [ -f "$MAPFILE" ]; then
     <(sort -k1,1 $MAPFILE) \
     | cut -f2 | sort | uniq > ${PREFIX}-mapped_parents.txt
 
-  echo "Number of parent reads with mapped fragments:" >> $PREFIX-TnSeq.txt
-  wc -l ${PREFIX}-mapped_parents.txt >> $PREFIX-TnSeq.txt
+  MAPPED_PARENTS=$(wc -l < ${PREFIX}-mapped_parents.txt)
+  UNMAPPED_PARENTS=$((TOTAL_PARENTS - MAPPED_PARENTS))
+
+  # Calculate percentages
+  PCT_MAPPED=$(awk "BEGIN {printf \"%.2f\", 100*${MAPPED_PARENTS}/${TOTAL_PARENTS}}")
+  PCT_UNMAPPED=$(awk "BEGIN {printf \"%.2f\", 100*${UNMAPPED_PARENTS}/${TOTAL_PARENTS}}")
+
+  echo "Parent reads with one or more mapped fragments: $MAPPED_PARENTS ($PCT_MAPPED%)" >> $PREFIX-TnSeq.txt
+  echo "Parent reads with no mapped fragments: $UNMAPPED_PARENTS ($PCT_UNMAPPED%)" >> $PREFIX-TnSeq.txt
 else
   echo "WARNING: Fragment map file $MAPFILE not found. Skipping parent deduplication." >> $PREFIX-TnSeq.txt
 fi
@@ -98,7 +114,7 @@ head -10 $PREFIX-sites.txt >> $PREFIX-TnSeq.txt
 
 # Cleanup
 echo "$PREFIX: Cleaning up..."
-mkdir $PREFIX 2> /dev/null
+mkdir -p $PREFIX
 mv $PREFIX.trim.fastq $PREFIX/
 mv $PREFIX-TnSeq.txt $PREFIX/
 mv $PREFIX.sam $PREFIX/
