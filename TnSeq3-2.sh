@@ -32,7 +32,7 @@ PREFIX=$1
 BOWTIEREF=$GENOME
 MAPFILE="${PREFIX}.fragment_map.tsv"
 
-echo "Performing TnSeq analysis on $PREFIX..."
+echo "Performing TnSeq analysis on fragments $PREFIX..."
 echo "TnSeq processing stats for $PREFIX" > $PREFIX-TnSeq.txt
 echo "Total sequences: " >> $PREFIX-TnSeq.txt
 egrep -c '^@' $PREFIX.trim.fastq >> $PREFIX-TnSeq.txt
@@ -81,7 +81,7 @@ if [ -f "$MAPFILE" ]; then
     for (p in best_read) print best_read[p];
   }' "$PREFIX-mapped.sam" > "$PREFIX.best_fragments.txt"
 
-  echo "Number of unique best fragments: $(wc -l < "$PREFIX.best_fragments.txt")"
+  echo "Number of unique best fragments for each read (should be same as cutadapt step): $(wc -l < "$PREFIX.best_fragments.txt")"
 
   # Create collapsed FASTQ
   echo "$PREFIX: Generating collapsed trimmed FASTQ..."
@@ -92,7 +92,7 @@ if [ -f "$MAPFILE" ]; then
   awk '{print "@" $1}' "$PREFIX.best_fragments.txt" > "$PREFIX.best_headers.txt"
   grep -A 3 -F -f "$PREFIX.best_headers.txt" "$TRIMMED" | grep -v '^--$' > "$COLLAPSED"
 
-  echo "Created collapsed trimmed fastq: $COLLAPSED"
+  echo "Created collapsed trimmed fastq to rerun bowtie on best fragments: $COLLAPSED"
 
   # OPTIONAL: Uncomment below if you want to map collapsed reads
   echo "$PREFIX: Mapping collapsed reads with Bowtie2..."
